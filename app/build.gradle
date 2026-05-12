@@ -1,54 +1,146 @@
-apply plugin: 'com.android.application'
-apply plugin: 'com.google.gms.google-services'
-apply plugin: 'io.fabric'
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.mozilla.rust-android-gradle.rust-android'
+}
+
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
 
 android {
-    compileSdkVersion 29
-    buildToolsVersion "29.0.0"
+    namespace 'org.proxydroid'
+    compileSdk 36
+    ndkVersion "25.1.8937393"
+
+    signingConfigs {
+        release {
+            def keystorePath = localProps.getProperty('KEYSTORE_PATH')
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword localProps.getProperty('KEYSTORE_PASSWORD')
+                keyAlias localProps.getProperty('KEY_ALIAS')
+                keyPassword localProps.getProperty('KEY_PASSWORD')
+            }
+        }
+    }
+
     defaultConfig {
         applicationId "org.proxydroid"
-        minSdkVersion 16
-        targetSdkVersion 29
-        versionCode 72
-        versionName "3.2.0"
+        minSdk 24
+        targetSdk 36
+        versionCode 74
+        versionName "3.4.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            // Specifies the ABI configurations of your native
-            // libraries Gradle should build and package with your APK.
             abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
         }
     }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (localProps.getProperty('KEYSTORE_PATH')) {
+                signingConfig signingConfigs.release
+            }
         }
     }
+
     compileOptions {
-        sourceCompatibility = 1.8
-        targetCompatibility = 1.8
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = '11'
     }
 
     externalNativeBuild {
         cmake {
-            version '3.10.2'
+            version '3.22.1'
             path "src/main/cpp/CMakeLists.txt"
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    buildFeatures {
+        compose true
+    }
+
+    composeOptions {
+        // Must match the Kotlin version (see gradle/libs.versions.toml).
+        kotlinCompilerExtensionVersion libs.versions.composeCompiler.get()
+    }
+
+    packagingOptions {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
         }
     }
 }
 
-configurations {
-    compile.exclude group: "junit", module: "junit"
+cargo {
+    module = "src/main/rust/proxydroid-tun2socks"
+    libname = "proxydroid_tun2socks"
+    targets = ["arm", "arm64", "x86", "x86_64"]
+    profile = "release"
+    prebuiltToolchains = true
+}
+
+tasks.whenTaskAdded { task ->
+    if (task.name == 'mergeDebugJniLibFolders' || task.name == 'mergeReleaseJniLibFolders' ||
+        task.name == 'javaPreCompileDebug' || task.name == 'javaPreCompileRelease') {
+        task.dependsOn 'cargoBuild'
+    }
 }
 
 dependencies {
+    // Local JARs (none expected today, kept for parity with legacy layout)
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'androidx.appcompat:appcompat:1.1.0'
-    implementation 'com.google.android.material:material:1.0.0'
-    implementation 'com.googlecode.json-simple:json-simple:1.1.1'
-    implementation 'org.mozilla:rhino:1.7.11'
-    implementation 'com.google.firebase:firebase-core:17.2.1'
-    implementation 'com.google.firebase:firebase-ads:18.3.0'
-    implementation 'com.google.firebase:firebase-analytics:17.2.1'
-    implementation 'com.crashlytics.sdk.android:crashlytics:2.10.1'
+
+    // AndroidX core / app shell
+    implementation libs.androidx.appcompat
+    implementation libs.androidx.core.ktx
+    implementation libs.material
+
+    // Kotlin
+    implementation libs.kotlin.stdlib
+
+    // Jetpack Compose (BOM pins all artifact versions)
+    def composeBom = platform(libs.compose.bom)
+    implementation composeBom
+    androidTestImplementation composeBom
+    implementation libs.compose.material3
+    implementation libs.compose.material.icons.extended
+    implementation libs.compose.ui.tooling.preview
+    debugImplementation libs.compose.ui.tooling
+    implementation libs.androidx.activity.compose
+    implementation libs.androidx.lifecycle.viewmodel.compose
+    implementation libs.androidx.lifecycle.runtime.compose
+    implementation libs.androidx.lifecycle.runtime.ktx
+
+    // Third-party
+    // json-simple drops JUnit as a compile dep; exclude to avoid runtime classpath pollution.
+    implementation(libs.json.simple) {
+        exclude group: 'junit', module: 'junit'
+    }
+    implementation libs.rhino
+
+    // Unit test
+    testImplementation libs.junit
+    testImplementation libs.mockito.core
+
+    // Android instrumented test
+    androidTestImplementation libs.androidx.test.junit
+    androidTestImplementation libs.androidx.test.runner
+    androidTestImplementation libs.androidx.test.rules
+    androidTestImplementation libs.androidx.test.espresso.core
 }
